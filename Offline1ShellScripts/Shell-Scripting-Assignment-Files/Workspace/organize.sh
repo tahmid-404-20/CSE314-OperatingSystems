@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# recursively(dfs) the root folder and move the .c, .java, .py files to target folder
 fileType=""
 testCount=""
 
+# compiles, executes and tests the codes
 execute() {
 
     filePath="$2/$fileType/$5"
@@ -49,6 +49,7 @@ execute() {
     echo "$5,$fileType,$matched,$notMatched" >>"$2"/result.csv
 }
 
+# recursively(dfs) visit the root folder and move the .c, .java, .py files to target folder
 visit() {
 
     if [ -d "$1" ]; then
@@ -146,52 +147,4 @@ else
             fi
         fi
     done
-
 fi
-
-# Now compiling and executing the programs
-
-# # C program
-# for i in "$2"/C/*
-# do
-#     gcc "$i"/main.c -o "$i"/main.out
-
-#     # echo ls "$3/" | wc -l
-#     for((j=1;j<=$testCount;j++))
-#     do
-#        file="out$j.txt"
-#        touch "$i"/$file
-#        "$i"/main.out < "$3/test$j.txt" > "$i"/$file
-
-#     #    echo "$i"/main "$3/test$j.txt" "$i"/$file
-#     done
-# done
-
-# # Java
-# for i in "$2"/Java/*
-# do
-#     javac "$i"/Main.java
-
-#     for((j=1;j<=$testCount;j++))
-#     do
-#        file="out$j.txt"
-#        touch "$i"/$file
-#        java -cp "$i" Main < "$3/test$j.txt" > "$i"/$file
-
-#     #    echo "$i"/Main "$3/test$j.txt" "$i"/$file
-#     done
-# done
-
-# # Python
-# for i in "$2"/Python/*
-# do
-
-#     for((j=1;j<=$testCount;j++))
-#     do
-#        file="out$j.txt"
-#        touch "$i"/$file
-#        python3 "$i"/main.py < "$3/test$j.txt" > "$i"/$file
-
-#     #    echo "$i"/Main "$3/test$j.txt" "$i"/$file
-#     done
-# done
