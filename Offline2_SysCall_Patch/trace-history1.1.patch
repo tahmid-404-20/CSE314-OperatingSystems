@@ -81,10 +81,12 @@ index 959b778..a26aaea 100644
  
    acquire(&wait_lock);
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..2fa6374 100644
+index d021857..c7fde48 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
-@@ -1,3 +1,14 @@
+@@ -1,3 +1,16 @@
++#define STRING_MAX 100
++
 +// system call info
 +struct syscall_stat {
 +  struct spinlock lock;
@@ -99,7 +101,7 @@ index d021857..2fa6374 100644
  // Saved registers for kernel context switches.
  struct context {
    uint64 ra;
-@@ -80,6 +91,8 @@ struct trapframe {
+@@ -80,6 +93,8 @@ struct trapframe {
  };
  
  enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
@@ -108,7 +110,7 @@ index d021857..2fa6374 100644
  
  // Per-process state
  struct proc {
-@@ -104,4 +117,9 @@ struct proc {
+@@ -104,4 +119,10 @@ struct proc {
    struct file *ofile[NOFILE];  // Open files
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
@@ -117,6 +119,7 @@ index d021857..2fa6374 100644
 +  int trace_syscallNum;
 +  int trace_argNum;
 +  uint64 trace_args[6];
++  char trace_string_args[6][STRING_MAX];   // this stores the string arguments only
  };
 diff --git a/kernel/stat.h b/kernel/stat.h
 index 19543af..665ca26 100644
@@ -133,21 +136,18 @@ index 19543af..665ca26 100644
 +  uint accum_time;
 +};
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..be4ed36 100644
+index ed65409..a95402b 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
-@@ -6,6 +6,10 @@
+@@ -6,6 +6,7 @@
  #include "proc.h"
  #include "syscall.h"
  #include "defs.h"
 +#include "stat.h"
-+
-+// lock for controlling access to syscallStat (defined in stat.h, not the array one)
-+struct spinlock sysCallStatusForUserlock;
  
  // Fetch the uint64 at addr from the current process.
  int
-@@ -101,6 +105,8 @@ extern uint64 sys_unlink(void);
+@@ -101,6 +102,8 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
@@ -156,17 +156,17 @@ index ed65409..be4ed36 100644
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
-@@ -126,8 +132,175 @@ static uint64 (*syscalls[])(void) = {
+@@ -126,8 +129,175 @@ static uint64 (*syscalls[])(void) = {
  [SYS_link]    sys_link,
  [SYS_mkdir]   sys_mkdir,
  [SYS_close]   sys_close,
 +[SYS_trace]   sys_trace,
 +[SYS_history] sys_history,
-+};
-+
+ };
+ 
 +// array that contains the type of each argument for each system call(at most 6 arguments)
 +// initialize all of these when system call is added
-+static enum argtype syscallArgtypes[][6] = {
++enum argtype syscallArgtypes[][6] = {
 +  [SYS_fork]    {ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
 +  [SYS_exit]    {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
 +  [SYS_wait]    {ARG_PTR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
@@ -190,8 +190,8 @@ index ed65409..be4ed36 100644
 +  [SYS_close]   {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
 +  [SYS_trace]   {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
 +  [SYS_history] {ARG_INT, ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
- };
- 
++};
++
 +// array that contains the name of each system call
 +static const char *syscallNames[] = {
 +  [SYS_fork]    "fork",
@@ -230,7 +230,6 @@ index ed65409..be4ed36 100644
 +        safestrcpy(syscallStats[i].syscallName,syscallNames[i], sizeof(syscallNames[i]));
 +        initlock(&syscallStats[i].lock, syscallStats[i].syscallName);
 +    }
-+    initlock(&sysCallStatusForUserlock, "sysCallStatusForUserlock");
 +}
 +
 +void getSysArgs(int sysNum) {
@@ -238,18 +237,23 @@ index ed65409..be4ed36 100644
 +  struct proc* p = myproc();
 +  p->trace_argNum = 0;
 +  for(int i=0;syscallArgtypes[sysNum][i]!=ARG_NONE; i++, p->trace_argNum++) {
-+    p->trace_args[p->trace_argNum] = argraw(i);
++    if(syscallArgtypes[sysNum][i]==ARG_STR) {
++      argstr(i, p->trace_string_args[p->trace_argNum], STRING_MAX);
++    } else {
++      p->trace_args[p->trace_argNum] = argraw(i);
++    }    
 +  }
 +}
 +
-+void printSyscallArgs2(int sysNum, struct proc* p) {
++void printSyscallArgs2(int sysNum) {
++  struct proc* p = myproc();
 +  for(int i=0; i< p->trace_argNum; i++) {
 +    switch(syscallArgtypes[sysNum][i]) {
 +      case ARG_INT:
 +        printf("%d", p->trace_args[i]);
 +        break;
 +      case ARG_STR:
-+        printf("%s", (char *)p->trace_args[i]);
++        printf("%s", p->trace_string_args[i]);
 +        break;
 +      case ARG_PTR:
 +        printf("%p", (void *)p->trace_args[i]);
@@ -295,7 +299,6 @@ index ed65409..be4ed36 100644
 +  struct proc *p = myproc();
 +  struct syscallStat stat;
 +
-+  acquire(&sysCallStatusForUserlock);
 +  safestrcpy(stat.syscall_name, syscallStats[sysNum].syscallName, sizeof(syscallStats[sysNum].syscallName));
 +
 +  acquire(&syscallStats[sysNum].lock);
@@ -303,13 +306,10 @@ index ed65409..be4ed36 100644
 +  stat.accum_time = syscallStats[sysNum].accum_time;
 +  release(&syscallStats[sysNum].lock);
 +
-+  release(&sysCallStatusForUserlock);
-+
 +  if(copyout(p->pagetable, addr, (char *)&stat, sizeof(stat)) < 0) {
 +      printf("Error in copyout\n");
 +      return -1;
 +  }
-+
 +
 +  return 0;
 +}
@@ -332,7 +332,7 @@ index ed65409..be4ed36 100644
  void
  syscall(void)
  {
-@@ -138,7 +311,54 @@ syscall(void)
+@@ -138,7 +308,39 @@ syscall(void)
    if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
      // Use num to lookup the system call function for num, call it,
      // and store its return value in p->trapframe->a0
@@ -341,17 +341,9 @@ index ed65409..be4ed36 100644
 +    if(p->trace_syscallNum > 0 && p->trace_syscallNum == num) {
 +      getSysArgs(num);
 +
-+      // printSyscallArgs(num);
-+
-+      acquire(&tickslock);
-+      uint startTime = ticks;
-+      release(&tickslock);
-+
++      uint startTime = sys_uptime();
 +      p->trapframe->a0 = syscalls[num]();
-+
-+      acquire(&tickslock);
-+      uint endTime = ticks;
-+      release(&tickslock);
++      uint endTime = sys_uptime();
 +
 +      struct syscall_stat *stat = &syscallStats[num];
 +
@@ -359,24 +351,17 @@ index ed65409..be4ed36 100644
 +      stat->accum_time += endTime - startTime;
 +      stat->count++;
 +      release(&stat->lock);
-+      
-+      // need lock to prevent interleaved printing and pid access
++
 +      acquire(&p->lock);
 +      printf("pid: %d, syscall: %s, args: (",p->pid, syscallNames[num]);
-+      printSyscallArgs2(num, p);
++      printSyscallArgs2(num);  
 +      printf("), return: %d\n", p->trapframe->a0);
 +      release(&p->lock);
 +      
 +    } else {
-+      acquire(&tickslock);
-+      uint startTime = ticks;
-+      release(&tickslock);
-+
++      uint startTime = sys_uptime();
 +      p->trapframe->a0 = syscalls[num]();
-+
-+      acquire(&tickslock);
-+      uint endTime = ticks;
-+      release(&tickslock);
++      uint endTime = sys_uptime();
 +
 +      struct syscall_stat *stat = &syscallStats[num];
 +
@@ -479,10 +464,10 @@ index 0000000..c4024d1
 +}
 diff --git a/user/trace.c b/user/trace.c
 new file mode 100644
-index 0000000..9699410
+index 0000000..b907442
 --- /dev/null
 +++ b/user/trace.c
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,31 @@
 +#include "kernel/param.h"
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
@@ -506,6 +491,11 @@ index 0000000..9699410
 +    nargv[i - 2] = argv[i];
 +  }
 +
++  // int id = fork();
++  // if(!id) {
++  //   trace(15);
++  // }
++  
 +  exec(nargv[0], nargv);
 +  exit(0);
 +}
