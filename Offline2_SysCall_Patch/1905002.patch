@@ -50,19 +50,22 @@ index 6624bff..b48f7ce 100644
 +#define MAXPATH      128   // maximum file path name
 \ No newline at end of file
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..a26aaea 100644
+index 959b778..c56d41a 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -124,6 +124,8 @@ allocproc(void)
+@@ -124,6 +124,11 @@ allocproc(void)
  found:
    p->pid = allocpid();
    p->state = USED;
 +  // my additions
 +  p->trace_syscallNum = -1;
++  for(int i=0;i<MAXSYSCALLARGS;i++) {
++    p->trace_argType[i] = ARG_NONE;
++  }
  
    // Allocate a trapframe page.
    if((p->trapframe = (struct trapframe *)kalloc()) == 0){
-@@ -169,6 +171,7 @@ freeproc(struct proc *p)
+@@ -169,6 +174,7 @@ freeproc(struct proc *p)
    p->killed = 0;
    p->xstate = 0;
    p->state = UNUSED;
@@ -70,22 +73,26 @@ index 959b778..a26aaea 100644
  }
  
  // Create a user page table for a given process, with no user memory,
-@@ -312,6 +315,9 @@ fork(void)
+@@ -312,6 +318,12 @@ fork(void)
  
    pid = np->pid;
  
 +  // copy syscallNum to child process - tahmid
 +  np->trace_syscallNum = p->trace_syscallNum;
++  for(int i=0;i<MAXSYSCALLARGS;i++) {
++    np->trace_argType[i] = p->trace_argType[i];
++  }
 +
    release(&np->lock);
  
    acquire(&wait_lock);
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..a5c446a 100644
+index d021857..67e08aa 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
-@@ -1,3 +1,16 @@
-+#define STRING_MAX 30
+@@ -1,3 +1,17 @@
++#define STRING_MAX 50
++#define MAXSYSCALLARGS 6
 +
 +// system call info
 +struct syscall_stat {
@@ -101,7 +108,7 @@ index d021857..a5c446a 100644
  // Saved registers for kernel context switches.
  struct context {
    uint64 ra;
-@@ -80,6 +93,8 @@ struct trapframe {
+@@ -80,6 +94,8 @@ struct trapframe {
  };
  
  enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
@@ -110,16 +117,17 @@ index d021857..a5c446a 100644
  
  // Per-process state
  struct proc {
-@@ -104,4 +119,10 @@ struct proc {
+@@ -104,4 +120,11 @@ struct proc {
    struct file *ofile[NOFILE];  // Open files
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
 +
-+  // my addition
++  // my addition - offline2
 +  int trace_syscallNum;
-+  int trace_argNum;
-+  uint64 trace_args[6];
-+  char trace_string_args[6][STRING_MAX];   // this stores the string arguments only
++
++  enum argtype trace_argType[MAXSYSCALLARGS];
++  uint64 trace_args[MAXSYSCALLARGS];
++  char trace_string_args[MAXSYSCALLARGS][STRING_MAX];   // this stores the string arguments only
  };
 diff --git a/kernel/stat.h b/kernel/stat.h
 index 19543af..665ca26 100644
@@ -136,7 +144,7 @@ index 19543af..665ca26 100644
 +  uint accum_time;
 +};
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..a95402b 100644
+index ed65409..ae62179 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
 @@ -6,6 +6,7 @@
@@ -147,7 +155,57 @@ index ed65409..a95402b 100644
  
  // Fetch the uint64 at addr from the current process.
  int
-@@ -101,6 +102,8 @@ extern uint64 sys_unlink(void);
+@@ -57,6 +58,14 @@ void
+ argint(int n, int *ip)
+ {
+   *ip = argraw(n);
++  
++  // offline2 - my addition
++  struct proc *p = myproc();
++  if(p->trapframe->a7 == p->trace_syscallNum) {
++    p->trace_argType[n] = ARG_INT;
++    p->trace_args[n] = *ip;
++  }
++
+ }
+ 
+ // Retrieve an argument as a pointer.
+@@ -66,6 +75,13 @@ void
+ argaddr(int n, uint64 *ip)
+ {
+   *ip = argraw(n);
++
++  // offline2 - my addition
++  struct proc *p = myproc();
++  if(p->trapframe->a7 == p->trace_syscallNum) {
++    p->trace_argType[n] = ARG_PTR;
++    p->trace_args[n] = *ip;
++  }
+ }
+ 
+ // Fetch the nth word-sized system call argument as a null-terminated string.
+@@ -76,9 +92,19 @@ argstr(int n, char *buf, int max)
+ {
+   uint64 addr;
+   argaddr(n, &addr);
+-  return fetchstr(addr, buf, max);
++  int retVal = fetchstr(addr, buf, max);
++
++  // offline2 - my addition
++  struct proc *p = myproc();
++  if(p->trapframe->a7 == p->trace_syscallNum) {
++    p->trace_argType[n] = ARG_STR;
++    safestrcpy(p->trace_string_args[n], buf, max);
++  }
++
++  return retVal;
+ }
+ 
++
+ // Prototypes for the functions that handle system calls.
+ extern uint64 sys_fork(void);
+ extern uint64 sys_exit(void);
+@@ -101,6 +127,8 @@ extern uint64 sys_unlink(void);
  extern uint64 sys_link(void);
  extern uint64 sys_mkdir(void);
  extern uint64 sys_close(void);
@@ -156,43 +214,15 @@ index ed65409..a95402b 100644
  
  // An array mapping syscall numbers from syscall.h
  // to the function that handles the system call.
-@@ -126,8 +129,175 @@ static uint64 (*syscalls[])(void) = {
+@@ -126,8 +154,108 @@ static uint64 (*syscalls[])(void) = {
  [SYS_link]    sys_link,
  [SYS_mkdir]   sys_mkdir,
  [SYS_close]   sys_close,
 +[SYS_trace]   sys_trace,
 +[SYS_history] sys_history,
- };
- 
-+// array that contains the type of each argument for each system call(at most 6 arguments)
-+// initialize all of these when system call is added
-+enum argtype syscallArgtypes[][6] = {
-+  [SYS_fork]    {ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_exit]    {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_wait]    {ARG_PTR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_pipe]    {ARG_PTR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_read]    {ARG_INT, ARG_PTR, ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_kill]    {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_exec]    {ARG_STR, ARG_PTR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_fstat]   {ARG_INT, ARG_PTR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_chdir]   {ARG_STR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_dup]     {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_getpid]  {ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_sbrk]    {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_sleep]   {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_uptime]  {ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_open]    {ARG_STR, ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_write]   {ARG_INT, ARG_PTR, ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_mknod]   {ARG_STR, ARG_INT, ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_unlink]  {ARG_STR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_link]    {ARG_STR, ARG_STR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_mkdir]   {ARG_STR, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_close]   {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_trace]   {ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
-+  [SYS_history] {ARG_INT, ARG_INT, ARG_NONE, ARG_NONE, ARG_NONE, ARG_NONE},
 +};
 +
-+// array that contains the name of each system call
++// array that contains the name of each system call, modify it when you add system calls
 +static const char *syscallNames[] = {
 +  [SYS_fork]    "fork",
 +  [SYS_exit]    "exit",
@@ -217,38 +247,13 @@ index ed65409..a95402b 100644
 +  [SYS_close]   "close",
 +  [SYS_trace]   "trace",
 +  [SYS_history] "history",
-+};
+ };
+ 
 +
-+// array of syscall_stat, supports locking for each system call separately
-+// initialized by syscallinit(); - called from main.c
-+static struct syscall_stat syscallStats[NELEM(syscalls)];
-+
-+void syscallinit() {
-+    for(int i=1; i<NELEM(syscalls); i++) {
-+        syscallStats[i].count = 0;
-+        syscallStats[i].accum_time = 0;
-+        safestrcpy(syscallStats[i].syscallName,syscallNames[i], sizeof(syscallNames[i]));
-+        initlock(&syscallStats[i].lock, syscallStats[i].syscallName);
-+    }
-+}
-+
-+void getSysArgs(int sysNum) {
-+  // every variable is local, so no need for lock, doesn't matter which p is being accessed
++void printSyscallArgs(int sysNum) {
 +  struct proc* p = myproc();
-+  p->trace_argNum = 0;
-+  for(int i=0;syscallArgtypes[sysNum][i]!=ARG_NONE; i++, p->trace_argNum++) {
-+    if(syscallArgtypes[sysNum][i]==ARG_STR) {
-+      argstr(i, p->trace_string_args[p->trace_argNum], STRING_MAX);
-+    } else {
-+      p->trace_args[p->trace_argNum] = argraw(i);
-+    }    
-+  }
-+}
-+
-+void printSyscallArgs2(int sysNum) {
-+  struct proc* p = myproc();
-+  for(int i=0; i< p->trace_argNum; i++) {
-+    switch(syscallArgtypes[sysNum][i]) {
++  for(int i=0; p->trace_argType[i]!=ARG_NONE; i++) {
++    switch(p->trace_argType[i]) {
 +      case ARG_INT:
 +        printf("%d", p->trace_args[i]);
 +        break;
@@ -262,37 +267,23 @@ index ed65409..a95402b 100644
 +        printf("Error in arg");
 +        break;
 +    }
++
 +    printf(", ");
 +  }
 +  printf("\b\b");
 +}
 +
-+void printSyscallArgs(int sysNum) {
-+  for(int i=0;syscallArgtypes[sysNum][i]!=ARG_NONE; i++) {
-+    switch(syscallArgtypes[sysNum][i]) {
-+      case ARG_INT:
-+        int arg;
-+        argint(i, &arg);
-+        printf("%d", arg);
-+        break;
-+      case ARG_STR:
-+        #define STRMAX 128
-+        char str[STRMAX];
-+        argstr(i, str, STRMAX);
-+        printf("%s", str);
-+        break;
-+      case ARG_PTR:
-+        uint64 argptr;
-+        argaddr(i, &argptr);
-+        printf("%p", (void *)argptr);
-+        break;
-+      default:
-+        printf("Error in arg");
-+        break;
++// array of syscall_stat, supports locking for each system call separately
++// initialized by syscallinit(); - called from main.c
++static struct syscall_stat syscallStats[NELEM(syscalls)];
++
++void syscallinit() {
++    for(int i=1; i<NELEM(syscalls); i++) {
++        syscallStats[i].count = 0;
++        syscallStats[i].accum_time = 0;
++        safestrcpy(syscallStats[i].syscallName,syscallNames[i], sizeof(syscallNames[i]));
++        initlock(&syscallStats[i].lock, syscallStats[i].syscallName);
 +    }
-+    printf(", ");
-+  }
-+  printf("\b\b");
 +}
 +
 +int getSystat(int sysNum, uint64 addr) {
@@ -332,44 +323,30 @@ index ed65409..a95402b 100644
  void
  syscall(void)
  {
-@@ -138,7 +308,39 @@ syscall(void)
+@@ -138,7 +266,26 @@ syscall(void)
    if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
      // Use num to lookup the system call function for num, call it,
      // and store its return value in p->trapframe->a0
--    p->trapframe->a0 = syscalls[num]();
++
++    uint startTime = sys_uptime();
+     p->trapframe->a0 = syscalls[num]();
++    uint endTime = sys_uptime();
++
++    struct syscall_stat *stat = &syscallStats[num];
++    acquire(&stat->lock); 
++    stat->accum_time += endTime - startTime;
++    stat->count++;
++    release(&stat->lock);
 +
 +    if(p->trace_syscallNum > 0 && p->trace_syscallNum == num) {
-+      getSysArgs(num);
-+
-+      uint startTime = sys_uptime();
-+      p->trapframe->a0 = syscalls[num]();
-+      uint endTime = sys_uptime();
-+
-+      struct syscall_stat *stat = &syscallStats[num];
-+
-+      acquire(&stat->lock); 
-+      stat->accum_time += endTime - startTime;
-+      stat->count++;
-+      release(&stat->lock);
-+
++      // to prevent interleaved printing
 +      acquire(&p->lock);
 +      printf("pid: %d, syscall: %s, args: (",p->pid, syscallNames[num]);
-+      printSyscallArgs2(num);  
++      printSyscallArgs(num);  
 +      printf("), return: %d\n", p->trapframe->a0);
 +      release(&p->lock);
-+      
-+    } else {
-+      uint startTime = sys_uptime();
-+      p->trapframe->a0 = syscalls[num]();
-+      uint endTime = sys_uptime();
-+
-+      struct syscall_stat *stat = &syscallStats[num];
-+
-+      acquire(&stat->lock); 
-+      stat->accum_time += endTime - startTime;
-+      stat->count++;
-+      release(&stat->lock); 
 +    }
++
    } else {
      printf("%d %s: unknown sys call %d\n",
              p->pid, p->name, num);
