@@ -98,15 +98,15 @@ index f0d3171..8c47451 100644
      trapinithart();  // install kernel trap vector
      plicinit();      // set up interrupt controller
 diff --git a/kernel/param.h b/kernel/param.h
-index 6624bff..b48f7ce 100644
+index 6624bff..bf40605 100644
 --- a/kernel/param.h
 +++ b/kernel/param.h
-@@ -10,4 +10,4 @@
- #define LOGSIZE      (MAXOPBLOCKS*3)  // max data blocks in on-disk log
+@@ -11,3 +11,5 @@
  #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
  #define FSSIZE       2000  // size of file system in blocks
--#define MAXPATH      128   // maximum file path name
-+#define MAXPATH      128   // maximum file path name
+ #define MAXPATH      128   // maximum file path name
++#define STRING_MAX 50
++#define MAXSYSCALLARGS 6
 \ No newline at end of file
 diff --git a/kernel/proc.c b/kernel/proc.c
 index 959b778..c56d41a 100644
@@ -146,13 +146,10 @@ index 959b778..c56d41a 100644
  
    acquire(&wait_lock);
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..67e08aa 100644
+index d021857..40a1462 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
-@@ -1,3 +1,17 @@
-+#define STRING_MAX 50
-+#define MAXSYSCALLARGS 6
-+
+@@ -1,3 +1,14 @@
 +// system call info
 +struct syscall_stat {
 +  struct spinlock lock;
@@ -167,7 +164,7 @@ index d021857..67e08aa 100644
  // Saved registers for kernel context switches.
  struct context {
    uint64 ra;
-@@ -80,6 +94,8 @@ struct trapframe {
+@@ -80,6 +91,8 @@ struct trapframe {
  };
  
  enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
@@ -176,7 +173,7 @@ index d021857..67e08aa 100644
  
  // Per-process state
  struct proc {
-@@ -104,4 +120,11 @@ struct proc {
+@@ -104,4 +117,11 @@ struct proc {
    struct file *ofile[NOFILE];  // Open files
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
@@ -229,21 +226,30 @@ index e16f18a..2ded47f 100644
 +}
 \ No newline at end of file
 diff --git a/kernel/stat.h b/kernel/stat.h
-index 19543af..665ca26 100644
+index 19543af..c561796 100644
 --- a/kernel/stat.h
 +++ b/kernel/stat.h
-@@ -9,3 +9,9 @@ struct stat {
+@@ -2,6 +2,8 @@
+ #define T_FILE    2   // File
+ #define T_DEVICE  3   // Device
+ 
++#include "param.h"
++
+ struct stat {
+   int dev;     // File system's disk device
+   uint ino;    // Inode number
+@@ -9,3 +11,9 @@ struct stat {
    short nlink; // Number of links to file
    uint64 size; // Size of file in bytes
  };
 +
 +struct syscallStat {
-+  char syscall_name[20];
++  char syscall_name[STRING_MAX];
 +  uint syscall_count;
 +  uint accum_time;
 +};
 diff --git a/kernel/syscall.c b/kernel/syscall.c
-index ed65409..5555e86 100644
+index ed65409..e351b18 100644
 --- a/kernel/syscall.c
 +++ b/kernel/syscall.c
 @@ -6,6 +6,7 @@
@@ -383,7 +389,7 @@ index ed65409..5555e86 100644
 +    for(int i=1; i<NELEM(syscalls); i++) {
 +        syscallStats[i].count = 0;
 +        syscallStats[i].accum_time = 0;
-+        safestrcpy(syscallStats[i].syscallName,syscallNames[i], sizeof(syscallNames[i]));
++        safestrcpy(syscallStats[i].syscallName,syscallNames[i], STRING_MAX);
 +        initlock(&syscallStats[i].lock, syscallStats[i].syscallName);
 +    }
 +}
@@ -392,7 +398,7 @@ index ed65409..5555e86 100644
 +  struct proc *p = myproc();
 +  struct syscallStat stat;
 +
-+  safestrcpy(stat.syscall_name, syscallStats[sysNum].syscallName, sizeof(syscallStats[sysNum].syscallName));
++  safestrcpy(stat.syscall_name, syscallStats[sysNum].syscallName, STRING_MAX);
 +
 +  acquire(&syscallStats[sysNum].lock);
 +  stat.syscall_count = syscallStats[sysNum].count;
@@ -531,26 +537,28 @@ index 0000000..b6e1aca
 +}
 diff --git a/user/history.c b/user/history.c
 new file mode 100644
-index 0000000..c4024d1
+index 0000000..0b9c5e6
 --- /dev/null
 +++ b/user/history.c
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,37 @@
 +#include "kernel/param.h"
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
 +
++#define SYSCALL_COUNT 24
++
 +int main(int argc, char *argv[]) {
 +  if (argc > 2) {
-+    fprintf(2, "Usage: %s sys_call_num command\n", argv[0]);
++    fprintf(2, "Usage: %s [sys_call_num]\n", argv[0]);
 +    exit(1);
 +  }
 +
 +
 +  struct syscallStat st;
 +  if(argc == 2) {
-+    if(atoi(argv[1]) < 1 || atoi(argv[1]) > 23) {
-+      fprintf(2, "Usage: %s sys_call_num command\n", argv[0]);
++    if(atoi(argv[1]) < 1 || atoi(argv[1]) > SYSCALL_COUNT) {
++      fprintf(2, "We have only 24 system calls\n");
 +      exit(1);
 +    }
 +    if(history(atoi(argv[1]), &st) < 0) {
@@ -560,7 +568,7 @@ index 0000000..c4024d1
 +    printf("%d:\t syscall: %s, #: %d, time: %d\n", atoi(argv[1]), st.syscall_name, st.syscall_count, st.accum_time);
 +    exit(0);
 +  } else {
-+    for(int i=1;i<=23;i++) {
++    for(int i=1;i<=SYSCALL_COUNT;i++) {
 +      if(history(i, &st) < 0) {
 +        fprintf(2, "history: history failed\n");
 +        exit(1);
