@@ -58,7 +58,7 @@ index 6624bff..729c609 100644
 +#define BOOST_INTERVAL 64 // time interval for boosting
 +#define DEFAULT_TICKET_COUNT 10 // default ticket count
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..8cdde33 100644
+index 959b778..4828668 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,7 @@
@@ -143,7 +143,7 @@ index 959b778..8cdde33 100644
  // Per-CPU process scheduler.
  // Each CPU calls scheduler() after setting itself up.
  // Scheduler never returns.  It loops, doing:
-@@ -446,25 +486,95 @@ scheduler(void)
+@@ -446,25 +486,96 @@ scheduler(void)
  {
    struct proc *p;
    struct cpu *c = mycpu();
@@ -188,9 +188,10 @@ index 959b778..8cdde33 100644
 +      uint64 rand = random_num() % total_tickets;
 +
 +      int selected_proc_index = -1;
-+      for(int i=0;i<q1proc_count;i++) {
-+        if(rand < lottery_stat[i].cumulative_tickets) {
-+          selected_proc_index = lottery_stat[i].p_index;
++      struct lottery_stat* st;
++      for(st = lottery_stat;st < &lottery_stat[NPROC]; st++) {
++        if(rand < st->cumulative_tickets) {
++          selected_proc_index = st->p_index;
 +          break;
 +        }
 +      }
@@ -200,7 +201,7 @@ index 959b778..8cdde33 100644
 +
 +      acquire(&selected_proc->lock);
 +      // release(&queue_lock);
-+      if(selected_proc->tickets_current != 0) {
++      if(selected_proc->tickets_current > 0) {
 +        selected_proc->tickets_current--;
 +      }
 +
@@ -242,7 +243,7 @@ index 959b778..8cdde33 100644
        }
        release(&p->lock);
      }
-@@ -493,19 +603,58 @@ sched(void)
+@@ -493,19 +604,57 @@ sched(void)
    if(intr_get())
      panic("sched interruptible");
  
@@ -263,8 +264,7 @@ index 959b778..8cdde33 100644
 +
 +    // printf("boosting\n");
 +    struct proc* p;
-+    for(int i=0; i<NPROC; i++) {
-+      p = &proc[i];
++    for(p = proc; p < &proc[NPROC]; p++) {
 +      acquire(&p->lock);
 +      if(p->inQ == 2) {
 +        p->inQ = 1;
@@ -413,10 +413,10 @@ index bc5f356..7926b7f 100644
 +#define SYS_settickets 22
 +#define SYS_getpinfo 23
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 1de184e..7b2cfde 100644
+index 1de184e..d98d093 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
-@@ -89,3 +89,37 @@ sys_uptime(void)
+@@ -89,3 +89,43 @@ sys_uptime(void)
    release(&tickslock);
    return xticks;
  }
@@ -431,6 +431,7 @@ index 1de184e..7b2cfde 100644
 +  argint(0, &num_tickets);
 +
 +  if(num_tickets < 1) {
++    // i have called setTickets twice, one with positive and one with negative number, so, setting default tickets explicitly
 +    acquire(&p->lock);
 +    p->tickets_original = p->tickets_current = DEFAULT_TICKET_COUNT;  // need not be set explicitly?? - will handle later
 +    release(&p->lock);
@@ -450,6 +451,11 @@ index 1de184e..7b2cfde 100644
 +  uint64 addr;
 +
 +  argaddr(0, &addr);
++
++  // check whether addr is NULL or bad
++  // if(addr == 0 || addr >= MAXVA) {
++  //   return -1;
++  // }
 +
 +  return provide_pstat_info(addr);
 +
