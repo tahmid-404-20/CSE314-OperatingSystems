@@ -58,7 +58,7 @@ index 6624bff..729c609 100644
 +#define BOOST_INTERVAL 64 // time interval for boosting
 +#define DEFAULT_TICKET_COUNT 10 // default ticket count
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..4828668 100644
+index 959b778..05ae7e5 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -5,6 +5,7 @@
@@ -143,17 +143,22 @@ index 959b778..4828668 100644
  // Per-CPU process scheduler.
  // Each CPU calls scheduler() after setting itself up.
  // Scheduler never returns.  It loops, doing:
-@@ -446,25 +486,96 @@ scheduler(void)
+@@ -446,28 +486,108 @@ scheduler(void)
  {
    struct proc *p;
    struct cpu *c = mycpu();
 -  
    c->proc = 0;
 +
++  // i break from RR and go check lottery, then start from rrIndex position, otherwise it will always start from 0
++  // ending up running the first process in Q2 always
++  int rrIndex = 0;
++
    for(;;){
      // Avoid deadlock by ensuring that devices can interrupt.
      intr_on();
  
+-    for(p = proc; p < &proc[NPROC]; p++) {
 +    // look over queue 1 first
 +    struct lottery_stat lottery_stat[NPROC];
 +
@@ -221,7 +226,9 @@ index 959b778..4828668 100644
 +    }
 +
 +    // q1 is empty, look over q2
-     for(p = proc; p < &proc[NPROC]; p++) {
++    int i;
++    for(i = rrIndex; i < NPROC; i++) {
++      p = &proc[i];
        acquire(&p->lock);
 -      if(p->state == RUNNABLE) {
 +      if(p->inQ == 2 && p->state == RUNNABLE) {
@@ -243,11 +250,18 @@ index 959b778..4828668 100644
        }
        release(&p->lock);
      }
-@@ -493,19 +604,57 @@ sched(void)
++    
++    rrIndex = (i == NPROC) ? 0 : (i+1)% NPROC;  // if i == NPROC, then no process was found in Q2, so start from 0 again
++
+   }
+ }
+ 
+@@ -493,19 +613,58 @@ sched(void)
    if(intr_get())
      panic("sched interruptible");
  
 +  if(p->state == SLEEPING) {  // it has started sleeping
++    // printf("Found a process in non runnable state pid: %d state: %d\n", p->pid, p->state);
 +    p->inQ = 1;
 +  }
 +
@@ -304,7 +318,7 @@ index 959b778..4828668 100644
    release(&p->lock);
  }
  
-@@ -681,3 +830,25 @@ procdump(void)
+@@ -681,3 +840,25 @@ procdump(void)
      printf("\n");
    }
  }
