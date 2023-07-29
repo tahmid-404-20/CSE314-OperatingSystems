@@ -1,6 +1,7 @@
 #include "ScienceProject.h"
 #include "time.h"
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <pthread.h>
 #include <semaphore.h>
@@ -24,6 +25,8 @@ pthread_mutex_t submit_mutex;
 pthread_mutex_t read_write_lock;
 int rc = 0;
 
+sem_t exit_lock;
+
 void initialize() {
 
   // initialize students
@@ -46,6 +49,7 @@ void initialize() {
   sem_init(&binding_lock, 0, NBINDERS);
   pthread_mutex_init(&submit_mutex, NULL);
   pthread_mutex_init(&read_write_lock, NULL);
+  sem_init(&exit_lock, 0, 0);
 
   // initialize tine
   start_time = std::chrono::high_resolution_clock::now();
@@ -155,6 +159,9 @@ void *student_activities(void *arg) {
     cout << "Group " << student->group_id << " has finished printing at time "
          << get_time() << endl;
 
+    // just a bit of time organizing printed docs
+    sleep(get_random_number() % 3 + 1);
+
     // binding code
     sem_wait(&binding_lock);
     cout << "Group " << student->group_id << " has started binding at time "
@@ -179,8 +186,8 @@ void *student_activities(void *arg) {
 void *staff_activities(void *arg) {
   int staff_id = *(int *)arg;
 
-  int starting_time = rand() % 3 + 1;    // 1-3 secs
-  int reading_interval = rand() % 2 + 1; // 1-2 secs
+  int starting_time = get_random_number() % 3 + 1;    // 1-3 secs
+  int reading_interval = get_random_number() % 4 + 2; // 2-5 secs
 
   sleep(starting_time);
 
@@ -207,17 +214,33 @@ void *staff_activities(void *arg) {
     }
     pthread_mutex_unlock(&submit_mutex);
 
+    if (n_submissions == N / M) {
+      sem_post(&exit_lock);
+    }
     sleep(reading_interval);
   }
 }
 
-int main() {
+int main(int argc, char *argv[]) {
 
-  N = 15;
-  M = 5;
-  printing_time = 10;
-  binding_time = 8;
-  read_write_time = 3;
+  if (argc != 3) {
+    cout << "Usage: ./a.out <input_file> <output_file>" << endl;
+    return 0;
+  }
+
+  std::ifstream inputFile(argv[1]);
+  std::streambuf *cinBuffer = std::cin.rdbuf();
+  std::cin.rdbuf(inputFile.rdbuf());
+
+  std::ofstream outputFile(argv[2]);
+  std::streambuf *coutBuffer = std::cout.rdbuf();
+  std::cout.rdbuf(outputFile.rdbuf());
+
+  cin >> N;
+  cin >> M;
+  cin >> printing_time;
+  cin >> binding_time;
+  cin >> read_write_time;
 
   pthread_t student_threads[N];
 
@@ -226,30 +249,29 @@ int main() {
 
   initialize();
 
-  int remainingStudents = N;
-  bool taken[N];
-
   // start staff threads
   for (int i = 0; i < NSTAFFS; i++) {
     staff_id[i] = i + 1;
     pthread_create(&staff_threads[i], NULL, staff_activities, &staff_id[i]);
   }
 
+  int remainingStudents = N;
+  bool taken[N];
   // start student threads
   while (remainingStudents) {
-    int randomStudent = rand() % N;
+    int randomStudent = get_random_number() % N;
     if (!taken[randomStudent]) {
       taken[randomStudent] = true;
       pthread_create(&student_threads[randomStudent], NULL, student_activities,
                      &students[randomStudent]);
       remainingStudents--;
-      if (get_time() > 50000) {
+      if (get_time() > 70000) {
         break;
       }
     }
   }
 
-  // after waiting for 50 secs, start the remaining students
+  // after waiting for 70 secs, start the remaining students
   for (int i = 0; i < N; i++) {
     if (!taken[i]) {
       pthread_create(&student_threads[i], NULL, student_activities,
@@ -257,13 +279,14 @@ int main() {
     }
   }
 
-  // join threads
-  for (int i = 0; i < N; i++) {
-    pthread_join(student_threads[i], NULL);
+  sem_wait(&exit_lock);
+
+  for (int i = 0; i < NSTAFFS; i++) {
+    pthread_cancel(staff_threads[i]);
   }
 
-  for(int i = 0; i < NSTAFFS; i++) {
-    pthread_join(staff_threads[i], NULL);
-  }
+  // Restore cin and cout to the original buffers (console)
+  std::cin.rdbuf(cinBuffer);
+  std::cout.rdbuf(coutBuffer);
   return 0;
 }

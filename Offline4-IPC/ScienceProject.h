@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <vector>
+#include "random.h"
 
 #define NPRINTERS 4
 #define NBINDERS 2
@@ -54,7 +55,7 @@ public:
     this->group_id = (this->id - 1) / M + 1;
     this->printer_id = this->id % NPRINTERS + 1;
     this->state = WRITING_REPORT;
-    this->writing_time = rand() % MAX_WRITING_TIME + 1;
+    this->writing_time = get_random_number() % MAX_WRITING_TIME + 1;
 
     sem_init(&lock, 0, 0);
   }

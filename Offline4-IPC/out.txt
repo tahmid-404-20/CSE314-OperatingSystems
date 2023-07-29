@@ -1,0 +1,112 @@
+Staff 1 has started reading at time 1001. No. of submission = 0
+Staff 1 has started reading at time 1001. No. of submission = 0
+Student 4 has arrived at the print station at time 1002
+Student 4 has started printing at time 1002
+Student 1 has arrived at the print station at time 1002
+Student 1 has started printing at time 1002
+Staff 2 has started reading at time 2001. No. of submission = 0
+Student 6 has arrived at the print station at time 2001
+Student 6 has started printing at time 2001
+Student 13 has arrived at the print station at time 2001
+Student 3 has arrived at the print station at time 2002
+Student 3 has started printing at time 2002
+Student 11 has arrived at the print station at time 2002
+Student 5 has arrived at the print station at time 2003
+Student 14 has arrived at the print station at time 3002
+Student 9 has arrived at the print station at time 3002
+Student 8 has arrived at the print station at time 3002
+Student 15 has arrived at the print station at time 3002
+Student 7 has arrived at the print station at time 3003
+Student 12 has arrived at the print station at time 4001
+Student 2 has arrived at the print station at time 4002
+Staff 1 has finished reading at time 4002. No. of submission = 0
+Student 10 has arrived at the print station at time 4002
+Staff 2 has finished reading at time 5001. No. of submission = 0
+Staff 1 has started reading at time 6002. No. of submission = 0
+Staff 2 has started reading at time 9001. No. of submission = 0
+Staff 1 has finished reading at time 9002. No. of submission = 0
+Student 4 has finished printing at time 11002
+Student 8 has started printing at time 11002
+Staff 1 has started reading at time 11002. No. of submission = 0
+Staff 1 has started reading at time 11002. No. of submission = 0
+Student 1 has finished printing at time 11003
+Student 5 has started printing at time 11004
+Student 6 has finished printing at time 12001
+Student 2 has started printing at time 12001
+Student 6 leader of group 2 is waiting for others to complete printing at time 12001
+Staff 2 has finished reading at time 12001. No. of submission = 0
+Student 3 has finished printing at time 12002
+Student 7 has started printing at time 12002
+Student 3 leader of group 1 is waiting for others to complete printing at time 12002
+Staff 1 has finished reading at time 14004. No. of submission = 0
+Staff 2 has started reading at time 16002. No. of submission = 0
+Staff 1 has started reading at time 16004. No. of submission = 0
+Staff 2 has finished reading at time 19002. No. of submission = 0
+Staff 1 has finished reading at time 19005. No. of submission = 0
+Student 8 has finished printing at time 21002
+Student 12 has started printing at time 21002
+Student 5 has finished printing at time 21004
+Student 9 has started printing at time 21004
+Group 2 has finished printing at time 21004
+Staff 1 has started reading at time 21005. No. of submission = 0
+Student 2 has finished printing at time 22001
+Student 10 has started printing at time 22001
+Group 1 has finished printing at time 22001
+Student 7 has finished printing at time 22002
+Student 11 has started printing at time 22002
+Staff 2 has started reading at time 23003. No. of submission = 0
+Group 2 has started binding at time 24004
+Staff 1 has finished reading at time 24005. No. of submission = 0
+Group 1 has started binding at time 25002
+Staff 2 has finished reading at time 26003. No. of submission = 0
+Staff 1 has started reading at time 26005. No. of submission = 0
+Staff 1 has finished reading at time 29005. No. of submission = 0
+Staff 2 has started reading at time 30003. No. of submission = 0
+Student 12 has finished printing at time 31003
+Student 12 leader of group 4 is waiting for others to complete printing at time 31003
+Student 9 has finished printing at time 31004
+Student 13 has started printing at time 31004
+Student 9 leader of group 3 is waiting for others to complete printing at time 31004
+Group 3 has finished printing at time 31004
+Staff 1 has started reading at time 31005. No. of submission = 0
+Student 10 has finished printing at time 32002
+Student 14 has started printing at time 32002
+Student 11 has finished printing at time 32002
+Student 15 has started printing at time 32002
+Group 4 has finished printing at time 32002
+Group 2 has finished binding at time 32005
+Group 1 has finished binding at time 33002
+Staff 2 has finished reading at time 33003. No. of submission = 0
+Group 4 has started binding at time 34003
+Group 3 has started binding at time 34005
+Staff 1 has finished reading at time 34005. No. of submission = 0
+Group 2 has started submitting at time 34006
+Group 2 has finished submitting at time 37006
+Group 1 has started submitting at time 37006
+Group 1 has finished submitting at time 40007
+Staff 1 has started reading at time 40007. No. of submission = 2
+Staff 2 has started reading at time 40007. No. of submission = 2
+Student 13 has finished printing at time 41004
+Student 14 has finished printing at time 42002
+Student 15 has finished printing at time 42003
+Student 15 leader of group 5 is waiting for others to complete printing at time 42003
+Group 5 has finished printing at time 42003
+Group 4 has finished binding at time 42003
+Group 3 has finished binding at time 42005
+Staff 1 has finished reading at time 43007. No. of submission = 2
+Staff 2 has finished reading at time 43008. No. of submission = 2
+Group 4 has started submitting at time 43008
+Group 5 has started binding at time 44003
+Group 4 has finished submitting at time 46008
+Group 3 has started submitting at time 46008
+Group 3 has finished submitting at time 49009
+Staff 1 has started reading at time 49009. No. of submission = 4
+Staff 2 has started reading at time 49009. No. of submission = 4
+Group 5 has finished binding at time 52003
+Staff 1 has finished reading at time 52009. No. of submission = 4
+Staff 2 has finished reading at time 52010. No. of submission = 4
+Group 5 has started submitting at time 52010
+Group 5 has finished submitting at time 55010
+Staff 1 has started reading at time 55010. No. of submission = 5
+Staff 2 has started reading at time 56010. No. of submission = 5
+Staff 1 has finished reading at time 58010. No. of submission = 5
