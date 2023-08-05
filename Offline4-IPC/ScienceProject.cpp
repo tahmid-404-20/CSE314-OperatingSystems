@@ -15,16 +15,22 @@ vector<Student> students;
 vector<Printer> printers;
 vector<Group> groups;
 
+#define SLEEP_MULTIPLIER 1000
+
 // locks
-pthread_mutex_t
-    printing_lock; // a mutex lock which deals with printing, changes the state
-                   // of printers, students (shared resource)
+// a mutex lock which deals with printing, changes the state
+// of printers, students (shared resource)
+pthread_mutex_t printing_lock;
+
+// binding lock
 sem_t binding_lock;
 
+// submission lock
 pthread_mutex_t submit_mutex;
 pthread_mutex_t read_write_lock;
 int rc = 0;
 
+// used to sleep the main thread till all students complete their all jobs
 sem_t exit_lock;
 
 void initialize() {
@@ -105,9 +111,6 @@ void provoke_other_group_persons(Student *student) {
 
 void start_printing(Student *student) {
   int student_id = student->id;
-
-  sleep(student->writing_time);
-
   pthread_mutex_lock(&printing_lock);
   student->state = WAITING_FOR_PRINTING;
   cout << "Student " << student_id
@@ -137,6 +140,8 @@ void end_printing(Student *student) {
   pthread_mutex_unlock(&printing_lock);
 }
 
+// used to wake up sleeping leader, waiting for others to finish printing
+// called from group.add_printed_count(),  which is called from end_printing()
 void enable_binding(int student_id) {
   sem_post(&(students[student_id - 1].lock));
 }
@@ -144,8 +149,10 @@ void enable_binding(int student_id) {
 void *student_activities(void *arg) {
   Student *student = (Student *)arg;
 
+  usleep(student->writing_time * SLEEP_MULTIPLIER); // student is writing
+
   start_printing(student);
-  sleep(printing_time);
+  usleep(printing_time * SLEEP_MULTIPLIER);
   end_printing(student);
 
   if (student->is_leader()) {
@@ -160,22 +167,25 @@ void *student_activities(void *arg) {
          << get_time() << endl;
 
     // just a bit of time organizing printed docs
-    sleep(get_random_number() % 3 + 1);
+    usleep((get_random_number() % 3 + 1) * SLEEP_MULTIPLIER);
 
     // binding code
     sem_wait(&binding_lock);
     cout << "Group " << student->group_id << " has started binding at time "
          << get_time() << endl;
-    sleep(binding_time);
+    usleep(binding_time * SLEEP_MULTIPLIER);
     cout << "Group " << student->group_id << " has finished binding at time "
          << get_time() << endl;
     sem_post(&binding_lock);
 
-    // submission_code
+    // walking to library
+    usleep((get_random_number() % 4 + 1) * SLEEP_MULTIPLIER);
+
+    // submission_code - students are writers
     pthread_mutex_lock(&read_write_lock);
     cout << "Group " << student->group_id << " has started submitting at time "
          << get_time() << endl;
-    sleep(read_write_time);
+    usleep(read_write_time * SLEEP_MULTIPLIER);
     n_submissions++;
     cout << "Group " << student->group_id << " has finished submitting at time "
          << get_time() << endl;
@@ -189,7 +199,7 @@ void *staff_activities(void *arg) {
   int starting_time = get_random_number() % 3 + 1;    // 1-3 secs
   int reading_interval = get_random_number() % 4 + 2; // 2-5 secs
 
-  sleep(starting_time);
+  usleep(starting_time * SLEEP_MULTIPLIER);
 
   while (true) {
     pthread_mutex_lock(&submit_mutex);
@@ -202,7 +212,7 @@ void *staff_activities(void *arg) {
          << get_time() << ". No. of submission = " << n_submissions << endl;
     pthread_mutex_unlock(&submit_mutex);
 
-    sleep(read_write_time);
+    usleep(read_write_time * SLEEP_MULTIPLIER);
 
     pthread_mutex_lock(&submit_mutex);
     cout << "Staff " << staff_id << " has finished reading at time "
@@ -214,10 +224,11 @@ void *staff_activities(void *arg) {
     }
     pthread_mutex_unlock(&submit_mutex);
 
+    //  all the groups have submitted, so exit
     if (n_submissions == N / M) {
       sem_post(&exit_lock);
     }
-    sleep(reading_interval);
+    usleep(reading_interval * SLEEP_MULTIPLIER);
   }
 }
 
@@ -257,6 +268,7 @@ int main(int argc, char *argv[]) {
 
   int remainingStudents = N;
   bool taken[N];
+
   // start student threads
   while (remainingStudents) {
     int randomStudent = get_random_number() % N;
@@ -265,13 +277,14 @@ int main(int argc, char *argv[]) {
       pthread_create(&student_threads[randomStudent], NULL, student_activities,
                      &students[randomStudent]);
       remainingStudents--;
-      if (get_time() > 70000) {
+      if (get_time() >
+          7000) { // if more than 7 seconds is passed, initialize the rest
         break;
       }
     }
   }
 
-  // after waiting for 70 secs, start the remaining students
+  // after waiting for 7 secs, start the remaining students
   for (int i = 0; i < N; i++) {
     if (!taken[i]) {
       pthread_create(&student_threads[i], NULL, student_activities,

@@ -12,7 +12,7 @@
 #define NBINDERS 2
 #define NSTAFFS 2
 
-#define MAX_WRITING_TIME 4
+#define MAX_WRITING_TIME 10
 
 int M, N;
 int printing_time, binding_time, read_write_time;
