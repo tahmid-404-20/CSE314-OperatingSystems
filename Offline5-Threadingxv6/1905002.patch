@@ -11,7 +11,7 @@ index 39a99d7..151b273 100644
  fs.img: mkfs/mkfs README $(UPROGS)
  	mkfs/mkfs fs.img README $(UPROGS)
 diff --git a/kernel/defs.h b/kernel/defs.h
-index a3c962b..f256398 100644
+index a3c962b..24155a0 100644
 --- a/kernel/defs.h
 +++ b/kernel/defs.h
 @@ -89,6 +89,7 @@ int             growproc(int);
@@ -28,7 +28,7 @@ index a3c962b..f256398 100644
  void            procdump(void);
 +int             thread_create(uint64, uint64, uint64);
 +int             thread_join(int);
-+void             thread_exit(void);
++void            exit_thread(void);
  
  // swtch.S
  void            swtch(struct context*, struct context*);
@@ -45,10 +45,45 @@ index a3c962b..f256398 100644
  void            uvmclear(pagetable_t, uint64);
  pte_t *         walk(pagetable_t, uint64, int);
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..e0b8744 100644
+index 959b778..b11daeb 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
-@@ -123,6 +123,10 @@ allocproc(void)
+@@ -9,6 +9,7 @@
+ struct cpu cpus[NCPU];
+ 
+ struct proc proc[NPROC];
++struct mem mem[NPROC];
+ 
+ struct proc *initproc;
+ 
+@@ -56,6 +57,13 @@ procinit(void)
+       p->state = UNUSED;
+       p->kstack = KSTACK((int) (p - proc));
+   }
++
++  struct mem* m;
++  for(m = mem; m < &mem[NPROC]; m++) {
++      initlock(&m->lock, "mem");
++      m->state = FREE;
++      m->ref_count = 0;
++  }
+ }
+ 
+ // Must be called with interrupts disabled,
+@@ -110,10 +118,12 @@ static struct proc*
+ allocproc(void)
+ {
+   struct proc *p;
++  struct mem* m;
+ 
+   for(p = proc; p < &proc[NPROC]; p++) {
+     acquire(&p->lock);
+     if(p->state == UNUSED) {
++      m = &mem[p - proc];
+       goto found;
+     } else {
+       release(&p->lock);
+@@ -123,7 +133,15 @@ allocproc(void)
  
  found:
    p->pid = allocpid();
@@ -57,36 +92,51 @@ index 959b778..e0b8744 100644
 +  p->is_thread = 0; // set in thread_create for threads
 +
    p->state = USED;
++  
++  m->state = TAKEN;
++  m->ref_count = 1;
++  p->mem_ptr = m;
  
    // Allocate a trapframe page.
-@@ -146,6 +150,10 @@ found:
-   p->context.ra = (uint64)forkret;
-   p->context.sp = p->kstack + PGSIZE;
- 
-+  // set up memlock
-+  initlock(&p->memlock, "memlock");
-+  p->memlock_ptr = &p->memlock; // a process points itself, thread points to parent(thread_create()). (disjoint set style)
-+
-   return p;
- }
- 
-@@ -158,8 +166,13 @@ freeproc(struct proc *p)
+   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+@@ -155,11 +173,26 @@ found:
+ static void
+ freeproc(struct proc *p)
+ {
++  
    if(p->trapframe)
      kfree((void*)p->trapframe);
    p->trapframe = 0;
 -  if(p->pagetable)
 -    proc_freepagetable(p->pagetable, p->sz);
 +  if(p->pagetable) {
-+    if(!p->is_thread){
++    p->mem_ptr->ref_count--;
++    // if(!p->is_thread){
++    //   proc_freepagetable(p->pagetable, p->sz);
++    // } else {  // it's a child of another parent thread, so, just free the pagetables only, not physical memory
++    //   thread_freepagetable(p->pagetable, p->sz);
++    // }
++
++    if(!p->mem_ptr->ref_count) {
 +      proc_freepagetable(p->pagetable, p->sz);
-+    } else {  // it's a child of another parent thread, so, just free the pagetables only, not physical memory
++    } 
++    else { // just free the pagetables only, not physical memory
 +      thread_freepagetable(p->pagetable, p->sz);
 +    }
 +  }
++
    p->pagetable = 0;
    p->sz = 0;
    p->pid = 0;
-@@ -215,6 +228,18 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
+@@ -168,6 +201,7 @@ freeproc(struct proc *p)
+   p->chan = 0;
+   p->killed = 0;
+   p->xstate = 0;
++  p->mem_ptr = 0;
+   p->state = UNUSED;
+ }
+ 
+@@ -215,6 +249,18 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
    uvmfree(pagetable, sz);
  }
  
@@ -105,16 +155,16 @@ index 959b778..e0b8744 100644
  // a user program that calls exec("/init")
  // assembled from ../user/initcode.S
  // od -t xC ../user/initcode
-@@ -263,15 +288,75 @@ growproc(int n)
+@@ -263,15 +309,75 @@ growproc(int n)
    struct proc *p = myproc();
  
    sz = p->sz;
 +  uint64 oldsz = sz;
 +
-+  acquire(p->memlock_ptr);
++  acquire(&p->mem_ptr->lock);
    if(n > 0){
      if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
-+      release(p->memlock_ptr);
++      release(&p->mem_ptr->lock);
        return -1;
      }
    } else if(n < 0){
@@ -158,7 +208,7 @@ index 959b778..e0b8744 100644
 +    }
 +  }
 +
-+  release(p->memlock_ptr);
++  release(&p->mem_ptr->lock);
    return 0;
 +
 +bad_alloc:
@@ -176,12 +226,26 @@ index 959b778..e0b8744 100644
 +
 +  }
 +
-+  release(p->memlock_ptr);
++  release(&p->mem_ptr->lock);
 +  return -1;
  }
  
  // Create a new process, copying the parent.
-@@ -325,6 +410,79 @@ fork(void)
+@@ -315,7 +421,12 @@ fork(void)
+   release(&np->lock);
+ 
+   acquire(&wait_lock);
+-  np->parent = p;
++  // a thread never got a child process, the process is child of the main (simplicity)
++  if(p->is_thread) {
++    np->parent = p->parent;
++  } else {
++    np->parent = p;
++  }
+   release(&wait_lock);
+ 
+   acquire(&np->lock);
+@@ -325,6 +436,96 @@ fork(void)
    return pid;
  }
  
@@ -197,15 +261,29 @@ index 959b778..e0b8744 100644
 +    return -1;
 +  }
 +
++  // reseting p->mem_ptr (naile ocd hoy)
++  p->mem_ptr->state = FREE;
++
 +  np->is_thread = 1;
 +  np->sz = 0;
 +  // Mirror parents pagetable to child
 +  if(uvmmirror(p->pagetable, np->pagetable, 0, p->sz) < 0){
++    // ekhane error hoile freeproc with p->mem_refcount = 1, p->sz = 0, so physical page is not being freed
++    // but page table structure is freed
 +    freeproc(np);
 +    release(&np->lock);
 +    return -1;
 +  }
 +  np->sz = p->sz;
++  
++  // setting up threads memory stuffs
++  np->mem_ptr = p->mem_ptr;
++
++  acquire(&np->mem_ptr->lock);
++  np->mem_ptr->ref_count++;
++  release(&np->mem_ptr->lock);
++
++  np->mem_id = p->mem_id;
 +
 +  // copy saved user registers.
 +  *(np->trapframe) = *(p->trapframe);
@@ -239,13 +317,16 @@ index 959b778..e0b8744 100644
 +  release(&np->lock);
 +
 +  acquire(&wait_lock);
-+  np->parent = p;
++  // a threads parent is never a thread, rather the main process (useful in exit())
++  if(p->is_thread) {
++    np->parent = p->parent;
++  } else {
++    np->parent = p;
++  }
 +  release(&wait_lock);
 +
 +  acquire(&np->lock);
 +  np->state = RUNNABLE;
-+  np->mem_id = p->mem_id;
-+  np->memlock_ptr = p->memlock_ptr;
 +  release(&np->lock);
 +
 +  return pid;
@@ -261,14 +342,35 @@ index 959b778..e0b8744 100644
  // Pass p's abandoned children to init.
  // Caller must hold wait_lock.
  void
-@@ -385,6 +543,49 @@ exit(int status)
+@@ -372,6 +573,20 @@ exit(int status)
+ 
+   // Parent might be sleeping in wait().
+   wakeup(p->parent);
++
++  struct proc* pp;
++  for(pp = proc; pp < &proc[NPROC]; pp++) {
++    if(pp->mem_ptr && pp->mem_id == p->mem_id && pp->pid != p->pid) {
++      acquire(&pp->lock);
++      // simply got the code from kill() function for O(n), if called kill(pp->pid) --> O(n^2)
++      pp->killed = 1;
++      if(pp->state == SLEEPING){
++        // Wake process from sleep().
++        pp->state = RUNNABLE;
++      }
++      release(&pp->lock);
++    }
++  } 
+   
+   acquire(&p->lock);
+ 
+@@ -385,6 +600,48 @@ exit(int status)
    panic("zombie exit");
  }
  
 +
 +// Exit the current thread.
 +void
-+thread_exit(void)
++exit_thread(void)
 +{
 +  struct proc *p = myproc();
 +
@@ -289,19 +391,18 @@ index 959b778..e0b8744 100644
 +  end_op();
 +  p->cwd = 0;
 +
-+  acquire(&wait_lock);
++  // acquire(&wait_lock);
 +
 +  // Give any children to init.
 +  // reparent(p);
 +
-+  // Parent might be sleeping in wait().
-+  wakeup(p->parent);
-+  
-+  acquire(&p->lock);
-+
++  // another thread might be sleeping in join
++   acquire(&p->lock);
 +  p->state = ZOMBIE;
 +
-+  release(&wait_lock);
++  wakeup(p);
++
++  // release(&wait_lock);
 +
 +  // Jump into the scheduler, never to return.
 +  sched();
@@ -311,7 +412,7 @@ index 959b778..e0b8744 100644
  // Wait for a child process to exit and return its pid.
  // Return -1 if this process has no children.
  int
-@@ -434,6 +635,49 @@ wait(uint64 addr)
+@@ -434,6 +691,55 @@ wait(uint64 addr)
    }
  }
  
@@ -321,64 +422,88 @@ index 959b778..e0b8744 100644
 +thread_join(int threadid)
 +{
 +  struct proc *pp;
-+  int havekids, pid;
++  int found, pid;
 +  struct proc *p = myproc();
 +
-+  acquire(&wait_lock);
++  // Scan through table looking for exited children.
++  found = 0;
++  pid = -1;
++  for(pp = proc; pp < &proc[NPROC]; pp++){
++    acquire(&pp->lock);
++    for(;;) {
++      if(pp->pid == threadid && pp->mem_id == p->mem_id && pp->killed == 0){
++        found = 1;
 +
-+  for(;;){
-+    // Scan through table looking for exited children.
-+    havekids = 0;
-+    for(pp = proc; pp < &proc[NPROC]; pp++){
-+      if(pp->parent == p && pp->pid == threadid && pp->mem_id == p->mem_id){
++        // No point in checking if I am dead
++        if(killed(p)){
++          release(&pp->lock);
++          return -1;
++        }
 +        // make sure the child isn't still in exit() or swtch().
-+        acquire(&pp->lock);
-+
-+        havekids = 1;
++        
 +        if(pp->state == ZOMBIE){
 +          // Found one.
 +          pid = pp->pid;
 +          freeproc(pp);
 +          release(&pp->lock);
-+          release(&wait_lock);
 +          return pid;
 +        }
++        // Wait for a child to exit.
++        sleep(pp, &pp->lock);      
++      } else if(found) {  // t2,t3 joined on t1, t2 freeproced t1, now t3 has come as if condition is false (pp->pid != threadid)
++        // i have woke up, but alas, someone else destroyed my long awaited one
 +        release(&pp->lock);
++        return pid;
++      } else {
++        // not this index, let's go for next index
++        break;
 +      }
-+    }
-+
-+    // No point waiting if we don't have any children.
-+    if(!havekids || killed(p)){
-+      release(&wait_lock);
-+      return -1;
-+    }
-+    
-+    // Wait for a child to exit.
-+    sleep(p, &wait_lock);  //DOC: wait-sleep
-+  }
++    }  
++    release(&pp->lock);
++  } 
++  return -1;   
 +}
++
 +
  // Per-CPU process scheduler.
  // Each CPU calls scheduler() after setting itself up.
  // Scheduler never returns.  It loops, doing:
-@@ -681,3 +925,4 @@ procdump(void)
+@@ -681,3 +987,4 @@ procdump(void)
      printf("\n");
    }
  }
 +
 diff --git a/kernel/proc.h b/kernel/proc.h
-index d021857..62b49fe 100644
+index d021857..07663e8 100644
 --- a/kernel/proc.h
 +++ b/kernel/proc.h
-@@ -104,4 +104,9 @@ struct proc {
+@@ -79,8 +79,17 @@ struct trapframe {
+   /* 280 */ uint64 t6;
+ };
+ 
++enum memstate { FREE, TAKEN };
++
++struct mem {
++  enum memstate state;
++  int ref_count;
++  struct spinlock lock;
++}; 
++
+ enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+ 
++
+ // Per-process state
+ struct proc {
+   struct spinlock lock;
+@@ -104,4 +113,9 @@ struct proc {
    struct file *ofile[NOFILE];  // Open files
    struct inode *cwd;           // Current directory
    char name[16];               // Process name (debugging)
 +
-+  struct spinlock memlock;	// find places to set and release the locks
-+  struct spinlock* memlock_ptr; // pointer to the lock, a process points itself, thread points to parent. (disjoint set style)
-+  int is_thread;               // if it is thread
-+  int mem_id;                   // All threads will have the same physical pages with the mothrer, hence the same memory ID
++  struct mem* mem_ptr;            // pointer to the memory struct, a process points itself, thread points to parent. (disjoint set style)
++  int is_thread;                  // if it is thread
++  int mem_id;                     // All threads will have the same physical pages with the mothrer, hence the same memory_id
++                                  // for a process, p->mem_id = p->pid
  };
 diff --git a/kernel/syscall.c b/kernel/syscall.c
 index ed65409..d687ffd 100644
@@ -416,7 +541,7 @@ index bc5f356..b6abf3a 100644
 +#define SYS_thread_join 23
 +#define SYS_thread_exit 24
 diff --git a/kernel/sysproc.c b/kernel/sysproc.c
-index 1de184e..450ea9b 100644
+index 1de184e..b685665 100644
 --- a/kernel/sysproc.c
 +++ b/kernel/sysproc.c
 @@ -89,3 +89,32 @@ sys_uptime(void)
@@ -447,7 +572,7 @@ index 1de184e..450ea9b 100644
 +uint64
 +sys_thread_exit(void) {
 +  
-+  thread_exit();
++  exit_thread();
 +
 +  return 0;
 +}
@@ -536,10 +661,10 @@ index 9f69783..f09924b 100644
  void
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..22ef02e
+index 0000000..926b468
 --- /dev/null
 +++ b/user/threads.c
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,71 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
@@ -588,8 +713,6 @@ index 0000000..22ef02e
 +
 +int main(int argc, char *argv[]) {
 +
-+    printf("HE;;O\n");
-+
 +  struct balance b1 = {"b1", 3200};
 +  struct balance b2 = {"b2", 2800};
 + 
@@ -601,6 +724,9 @@ index 0000000..22ef02e
 +
 +  thread1 = thread_create(do_work, (void*)&b1, s1);
 +  thread2 = thread_create(do_work, (void*)&b2, s2); 
++
++//   thread_create(do_work, (void*)&b1, s1);
++//   thread_create(do_work, (void*)&b2, s2);
 +
 +  r1 = thread_join(thread1);
 +  r2 = thread_join(thread2);
