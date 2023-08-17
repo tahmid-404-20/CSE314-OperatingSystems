@@ -45,7 +45,7 @@ index a3c962b..24155a0 100644
  void            uvmclear(pagetable_t, uint64);
  pte_t *         walk(pagetable_t, uint64, int);
 diff --git a/kernel/proc.c b/kernel/proc.c
-index 959b778..b11daeb 100644
+index 959b778..95f7b2f 100644
 --- a/kernel/proc.c
 +++ b/kernel/proc.c
 @@ -9,6 +9,7 @@
@@ -231,7 +231,7 @@ index 959b778..b11daeb 100644
  }
  
  // Create a new process, copying the parent.
-@@ -315,7 +421,12 @@ fork(void)
+@@ -315,7 +421,95 @@ fork(void)
    release(&np->lock);
  
    acquire(&wait_lock);
@@ -242,13 +242,15 @@ index 959b778..b11daeb 100644
 +  } else {
 +    np->parent = p;
 +  }
-   release(&wait_lock);
- 
-   acquire(&np->lock);
-@@ -325,6 +436,96 @@ fork(void)
-   return pid;
- }
- 
++  release(&wait_lock);
++
++  acquire(&np->lock);
++  np->state = RUNNABLE;
++  release(&np->lock);
++
++  return pid;
++}
++
 +// create a new thread in disguise of a process
 +int
 +thread_create(uint64 fcn, uint64 arg, uint64 stack) {
@@ -323,21 +325,21 @@ index 959b778..b11daeb 100644
 +  } else {
 +    np->parent = p;
 +  }
-+  release(&wait_lock);
-+
-+  acquire(&np->lock);
-+  np->state = RUNNABLE;
-+  release(&np->lock);
-+
-+  return pid;
+   release(&wait_lock);
+ 
+   acquire(&np->lock);
+@@ -323,8 +517,15 @@ fork(void)
+   release(&np->lock);
+ 
+   return pid;
 +
 +bad:
 +  if(np->pagetable) {
 +    freeproc(np);
 +  }
 +  return -1;
-+}
-+
+ }
+ 
 +
  // Pass p's abandoned children to init.
  // Caller must hold wait_lock.
@@ -363,7 +365,7 @@ index 959b778..b11daeb 100644
    
    acquire(&p->lock);
  
-@@ -385,6 +600,48 @@ exit(int status)
+@@ -385,6 +600,53 @@ exit(int status)
    panic("zombie exit");
  }
  
@@ -374,45 +376,50 @@ index 959b778..b11daeb 100644
 +{
 +  struct proc *p = myproc();
 +
-+  if(p == initproc)
++  if(!p->is_thread) {
++    // as it is not quite wise to call thread_exit from a process, but our OS is graceful
++    exit(1);
++  } else {
++    if(p == initproc)
 +    panic("init exiting");
 +
-+  // Close all open files.
-+  for(int fd = 0; fd < NOFILE; fd++){
-+    if(p->ofile[fd]){
-+      struct file *f = p->ofile[fd];
-+      fileclose(f);
-+      p->ofile[fd] = 0;
++    // Close all open files.
++    for(int fd = 0; fd < NOFILE; fd++){
++      if(p->ofile[fd]){
++        struct file *f = p->ofile[fd];
++        fileclose(f);
++        p->ofile[fd] = 0;
++      }
 +    }
++
++    begin_op();
++    iput(p->cwd);
++    end_op();
++    p->cwd = 0;
++
++    // acquire(&wait_lock);
++
++    // Give any children to init.
++    // reparent(p);
++
++    // another thread might be sleeping in join
++    acquire(&p->lock);
++    p->state = ZOMBIE;
++
++    wakeup(p);
++
++    // release(&wait_lock);
++
++    // Jump into the scheduler, never to return.
++    sched();
++    panic("zombie exit");
 +  }
-+
-+  begin_op();
-+  iput(p->cwd);
-+  end_op();
-+  p->cwd = 0;
-+
-+  // acquire(&wait_lock);
-+
-+  // Give any children to init.
-+  // reparent(p);
-+
-+  // another thread might be sleeping in join
-+   acquire(&p->lock);
-+  p->state = ZOMBIE;
-+
-+  wakeup(p);
-+
-+  // release(&wait_lock);
-+
-+  // Jump into the scheduler, never to return.
-+  sched();
-+  panic("zombie exit");
 +}
 +
  // Wait for a child process to exit and return its pid.
  // Return -1 if this process has no children.
  int
-@@ -434,6 +691,55 @@ wait(uint64 addr)
+@@ -434,6 +696,55 @@ wait(uint64 addr)
    }
  }
  
@@ -468,7 +475,7 @@ index 959b778..b11daeb 100644
  // Per-CPU process scheduler.
  // Each CPU calls scheduler() after setting itself up.
  // Scheduler never returns.  It loops, doing:
-@@ -681,3 +987,4 @@ procdump(void)
+@@ -681,3 +992,4 @@ procdump(void)
      printf("\n");
    }
  }
@@ -671,6 +678,44 @@ index 9f69783..f09924b 100644
  // mark a PTE invalid for user access.
  // used by exec for the user stack guard page.
  void
+diff --git a/user/mutex_user.h b/user/mutex_user.h
+new file mode 100644
+index 0000000..5a62a04
+--- /dev/null
++++ b/user/mutex_user.h
+@@ -0,0 +1,31 @@
++// #include "user.h"
++// Mutual exclusion lock.
++
++struct thread_mutex {
++  unsigned int locked;       // Is the lock held?
++};
++
++void
++thread_mutex_init(struct thread_mutex *lk)
++{
++  lk->locked = 0;
++}
++
++void
++thread_mutex_lock(struct thread_mutex *lk)
++{
++  
++  while(__sync_lock_test_and_set(&lk->locked, 1)) {
++    sleep(1);
++  }
++
++  __sync_synchronize();
++}
++
++// Release the lock.
++void
++thread_mutex_unlock(struct thread_mutex *lk)
++{
++  __sync_synchronize();
++  __sync_lock_release(&lk->locked);
++}
+\ No newline at end of file
 diff --git a/user/spinlock_user.h b/user/spinlock_user.h
 new file mode 100644
 index 0000000..305000a
@@ -731,14 +776,15 @@ index 0000000..305000a
 \ No newline at end of file
 diff --git a/user/threads.c b/user/threads.c
 new file mode 100644
-index 0000000..17dcb92
+index 0000000..eba65a3
 --- /dev/null
 +++ b/user/threads.c
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,94 @@
 +#include "kernel/types.h"
 +#include "kernel/stat.h"
 +#include "user/user.h"
 +#include "spinlock_user.h"
++#include "mutex_user.h"
 +
 +struct balance {
 +  char name[32];
@@ -746,6 +792,8 @@ index 0000000..17dcb92
 +};
 +
 +struct thread_spinlock lock;
++struct thread_mutex mlock;
++struct thread_mutex print_mutex;
 +
 +volatile int total_balance = 0;
 +
@@ -763,18 +811,21 @@ index 0000000..17dcb92
 +  int old;
 +
 +  struct balance *b = (struct balance *)arg;
++
++  thread_mutex_lock(&print_mutex);
 +  printf("Starting do_work: s:%s\n", b->name);
++  thread_mutex_unlock(&print_mutex);
 +
 +  for (i = 0; i < b->amount; i++) {
 +    // lock and mlock will be implemented by you.
-+    thread_spin_lock(&lock);
-+    // thread_mutex_lock(&mlock);
++    // thread_spin_lock(&lock);
++    thread_mutex_lock(&mlock);
 +    old = total_balance;
 +    delay(100000);
 +    if(old != total_balance)  printf("we will miss an update. old: %d total_balance: %d\n", old, total_balance);
 +    total_balance = old + 1;
-+    thread_spin_unlock(&lock);
-+    //  thread_mutex_lock(&mlock);
++    // thread_spin_unlock(&lock);
++     thread_mutex_unlock(&mlock);
 +  }
 +
 +  printf("Done s:%x\n", b->name);
@@ -786,20 +837,31 @@ index 0000000..17dcb92
 +int main(int argc, char *argv[]) {
 +
 +  thread_spin_init(&lock);
++
++  thread_mutex_init(&mlock);
++  thread_mutex_init(&print_mutex);
++  
++
 +  struct balance b1 = {"b1", 3200};
 +  struct balance b2 = {"b2", 2800};
 +
 +  void *s1, *s2;
-+  int thread1, thread2, r1, r2;
 +
 +  s1 = malloc(4096); // 4096 is the PGSIZE defined in kernel/riscv.h
 +  s2 = malloc(4096);
 +
++
++  // for extensive testing of different events
++    // thread_create(do_work, (void*)&b1, s1);
++    // thread_create(do_work, (void*)&b2, s2);
++
++    // thread_exit();
++    // exit(0);
++
++  int thread1, thread2, r1, r2;
++
 +  thread1 = thread_create(do_work, (void *)&b1, s1);
 +  thread2 = thread_create(do_work, (void *)&b2, s2);
-+
-+  //   thread_create(do_work, (void*)&b1, s1);
-+  //   thread_create(do_work, (void*)&b2, s2);
 +
 +  r1 = thread_join(thread1);
 +  r2 = thread_join(thread2);
@@ -808,6 +870,9 @@ index 0000000..17dcb92
 +         thread2, r2, total_balance);
 +
 +  exit(0);
++
++
++  return 0;
 +}
 \ No newline at end of file
 diff --git a/user/user.h b/user/user.h
